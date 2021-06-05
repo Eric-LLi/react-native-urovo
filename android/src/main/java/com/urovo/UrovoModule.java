@@ -6,6 +6,8 @@ import android.content.BroadcastReceiver;
 import android.content.Context;
 import android.content.Intent;
 import android.content.IntentFilter;
+import android.device.ScanManager;
+import android.device.scanner.configuration.Triggering;
 import android.os.Handler;
 import android.os.Looper;
 import android.util.Log;
@@ -20,7 +22,6 @@ import com.facebook.react.bridge.WritableMap;
 import com.facebook.react.modules.core.DeviceEventManagerModule;
 import com.module.interaction.ModuleConnector;
 import com.module.interaction.RXTXListener;
-import com.nativec.tools.ModuleManager;
 import com.rfid.RFIDReaderHelper;
 import com.rfid.ReaderConnector;
 import com.facebook.react.bridge.ReactApplicationContext;
@@ -39,6 +40,12 @@ import java.io.FileOutputStream;
 import java.io.IOException;
 import java.util.ArrayList;
 
+import static android.content.Intent.ACTION_BATTERY_CHANGED;
+import static android.device.ScanManager.ACTION_DECODE;
+import static android.device.ScanManager.BARCODE_LENGTH_TAG;
+import static android.device.ScanManager.BARCODE_STRING_TAG;
+import static android.device.ScanManager.DECODE_DATA_TAG;
+
 public class UrovoModule extends ReactContextBaseJavaModule implements LifecycleEventListener {
 
     private final String LOG = "[UROVO]";
@@ -56,12 +63,15 @@ public class UrovoModule extends ReactContextBaseJavaModule implements Lifecycle
     private static boolean isReadBarcode = false;
     private static boolean isReading = false;
 
+    private static String newTag;
+
     //RFID
     private static final ModuleConnector mConnector = new ReaderConnector();
     private static RFIDReaderHelper mReaderHelper;
 
     private static ReaderSetting m_curReaderSetting;
     //Barcode
+    private ScanManager mScanManager = null;
 
     public UrovoModule(ReactApplicationContext reactContext) {
         super(reactContext);
@@ -90,7 +100,7 @@ public class UrovoModule extends ReactContextBaseJavaModule implements Lifecycle
         if (keyCode == 523) {
             if (event.getRepeatCount() == 0) {
                 if (isReadBarcode) {
-//                    barcodeRead();
+                    barcodeRead();
                 } else {
                     read();
                 }
@@ -106,7 +116,7 @@ public class UrovoModule extends ReactContextBaseJavaModule implements Lifecycle
         if (keyCode == 523) {
             if (event.getRepeatCount() == 0) {
                 if (isReadBarcode) {
-//                    barcodeCancel();
+                    barcodeCancel();
                 } else {
                     cancel();
                 }
@@ -132,9 +142,7 @@ public class UrovoModule extends ReactContextBaseJavaModule implements Lifecycle
 
     @Override
     public void onHostPause() {
-        if (mReaderHelper != null) {
-            //
-        }
+        //
     }
 
     @Override
@@ -218,7 +226,7 @@ public class UrovoModule extends ReactContextBaseJavaModule implements Lifecycle
     public void setAntennaLevel(int antennaLevel, Promise promise) {
         try {
             if (mConnector.isConnected()) {
-                int result = mReaderHelper.setOutputPower((byte) m_curReaderSetting.btReadId, (byte) antennaLevel);
+                int result = mReaderHelper.setOutputPower(m_curReaderSetting.btReadId, (byte) antennaLevel);
 
                 if (result == 0)
                     m_curReaderSetting.btAryOutputPower = new byte[]{(byte) antennaLevel};
@@ -233,31 +241,35 @@ public class UrovoModule extends ReactContextBaseJavaModule implements Lifecycle
     }
 
     @ReactMethod
-    public void programTag(String oldTag, String newTag, Promise promise) {
+    public void programTag(String oldTag, String newTag2, Promise promise) {
         try {
             if (mConnector.isConnected()) {
-//            String strPWD = "00000000";
-//            int cntStr = 6;
-//            int filterPtr = 32;
-//            int strPtr = 2;
-//
-//            boolean result = mReader.writeData(
-//                    strPWD,
-//                    IUHF.Bank_EPC,
-//                    filterPtr,
-//                    oldTag.length() * 4,
-//                    oldTag,
-//                    IUHF.Bank_EPC,
-//                    strPtr,
-//                    cntStr,
-//                    newTag
-//            );
-//
-//            WritableMap map = Arguments.createMap();
-//            map.putBoolean("status", result);
-//            map.putString("error", result ? null : "Program tag fail");
-//
-//            sendEvent(WRITE_TAG_STATUS, map);
+                newTag = newTag2;
+
+                byte[] btAryEpc = StringToBytes(oldTag.toUpperCase());
+                int result = mReaderHelper.setAccessEpcMatch(m_curReaderSetting.btReadId, (byte) btAryEpc.length, btAryEpc);
+
+                promise.resolve(result == 0);
+            } else {
+                throw new Exception("Reader is not connected");
+            }
+        } catch (Exception err) {
+            promise.reject(err);
+        }
+    }
+
+    @ReactMethod
+    public void setEnabled(boolean enable, Promise promise) {
+        try {
+            if (mConnector.isConnected()) {
+                if (enable) {
+                    mScanManager.lockTrigger();
+                    isReadBarcode = false;
+                } else {
+                    mScanManager.unlockTrigger();
+                    isReadBarcode = true;
+                }
+                promise.resolve(true);
             } else {
                 throw new Exception("Reader is not connected");
             }
@@ -265,14 +277,6 @@ public class UrovoModule extends ReactContextBaseJavaModule implements Lifecycle
             promise.reject(err);
         }
 
-    }
-
-    @ReactMethod
-    public void setEnabled(boolean enable, Promise promise) {
-        if (mConnector.isConnected()) {
-            isReadBarcode = !enable;
-        }
-        promise.resolve(true);
     }
 
     @ReactMethod
@@ -299,21 +303,42 @@ public class UrovoModule extends ReactContextBaseJavaModule implements Lifecycle
             doDisconnect();
         }
 
+        //RFID
         set53CGPIOEnabled(true);
 
         boolean result = mConnector.connectCom("/dev/ttyHSL0", 115200, this.reactContext);
+
+        if (!result) throw new Exception("Failed to power on reader");
 
         mReaderHelper = RFIDReaderHelper.getDefaultHelper();
         mReaderHelper.registerObserver(rxObserver);
         mReaderHelper.setRXTXListener(mListener);
 
         m_curReaderSetting = ReaderSetting.newInstance();
-        if (result) mReaderHelper.getOutputPower(m_curReaderSetting.btReadId);
 
-        this.reactContext.registerReceiver(mReceiver, new IntentFilter(Intent.ACTION_BATTERY_CHANGED));
+        mReaderHelper.getOutputPower(m_curReaderSetting.btReadId);
+
+        //Barcode
+        mScanManager = new ScanManager();
+        boolean powerOn = mScanManager.getScannerState();
+        if (!powerOn) {
+            powerOn = mScanManager.openScanner();
+
+            if (!powerOn) throw new Exception("Failed to power on barcode scanner");
+        }
+
+        mScanManager.enableAllSymbologies(true);
+        mScanManager.setTriggerMode(Triggering.HOST);
+        //Set output mode to 0=Intent, 1=TextInput
+        mScanManager.switchOutputMode(0);
+
+        IntentFilter filter = new IntentFilter();
+        filter.addAction(ACTION_DECODE);
+        filter.addAction(ACTION_BATTERY_CHANGED);
+        this.reactContext.registerReceiver(mReceiver, filter);
 
         WritableMap map = Arguments.createMap();
-        map.putBoolean("status", result);
+        map.putBoolean("status", true);
         map.putString("error", null);
 
         sendEvent(READER_STATUS, map);
@@ -341,6 +366,14 @@ public class UrovoModule extends ReactContextBaseJavaModule implements Lifecycle
             m_curReaderSetting = null;
         }
 
+        //Barcode
+        if (mScanManager != null) {
+            mScanManager.stopDecode();
+            mScanManager.closeScanner();
+
+            mScanManager = null;
+        }
+
         WritableMap map = Arguments.createMap();
         map.putBoolean("status", false);
         map.putString("error", null);
@@ -351,18 +384,25 @@ public class UrovoModule extends ReactContextBaseJavaModule implements Lifecycle
     private void read() {
         if (mConnector.isConnected()) {
             isReading = true;
-
-            if (isSingleRead) {
-                mReaderHelper.realTimeInventory(m_curReaderSetting.btReadId, (byte) 1);
-            } else {
-                mLoopRunnable.run();
-            }
+            mLoopRunnable.run();
         }
     }
 
     private void cancel() {
         isReading = false;
         mLoopHandler.removeCallbacks(mLoopRunnable);
+    }
+
+    private void barcodeRead() {
+        if (mScanManager != null) {
+            mScanManager.startDecode();
+        }
+    }
+
+    private void barcodeCancel() {
+        if (mScanManager != null) {
+            mScanManager.stopDecode();
+        }
     }
 
     private final Handler mLoopHandler = new Handler(Looper.getMainLooper());
@@ -381,6 +421,34 @@ public class UrovoModule extends ReactContextBaseJavaModule implements Lifecycle
         protected void onExeCMDStatus(byte cmd, byte status) {
             String strLog = FormatUtils.format(cmd, status);
             Log.d(LOG, "onExeCMDStatus: " + strLog);
+
+            if (cmd == CMD.SET_ACCESS_EPC_MATCH) {
+                if (status == ERROR.SUCCESS) {
+                    //Tag memory bank(0x00:RESERVED, 0x01:EPC, 0x02:TID, 0x03:USER)
+                    byte btMemBank = 0x01;
+                    byte btWordAdd = 0x02;
+                    byte[] btAryPassWord = StringToBytes("00000000");
+                    byte[] btAryData = StringToBytes(newTag.toUpperCase());
+                    byte btWordCnt = (byte) ((btAryData.length / 2 + btAryData.length % 2) & 0xFF);
+
+                    mReaderHelper.blockWriteTag(m_curReaderSetting.btReadId, btAryPassWord, btMemBank, btWordAdd, btWordCnt, btAryData);
+                } else {
+                    WritableMap map = Arguments.createMap();
+                    map.putBoolean("status", false);
+                    map.putString("error", strLog);
+                    sendEvent(WRITE_TAG_STATUS, map);
+                }
+            } else if (cmd == CMD.WRITE_TAG || cmd == CMD.BLOCK_WRITE_TAG) {
+                WritableMap map = Arguments.createMap();
+                if (status == ERROR.SUCCESS) {
+                    map.putBoolean("status", true);
+                    map.putString("error", null);
+                } else {
+                    map.putBoolean("status", false);
+                    map.putString("error", strLog);
+                }
+                sendEvent(WRITE_TAG_STATUS, map);
+            }
         }
 
         @Override
@@ -394,7 +462,7 @@ public class UrovoModule extends ReactContextBaseJavaModule implements Lifecycle
             String epc = tag.strEPC.replaceAll(" ", "");
 
             Log.d(LOG, "epc:" + epc);
-//            int rssi = Integer.parseInt(tag.strRSSI);
+            int rssi = Integer.parseInt(tag.strRSSI);
 
             if (isSingleRead) {
                 if (addTagToList(epc) && cacheTags.size() == 1) {
@@ -430,7 +498,14 @@ public class UrovoModule extends ReactContextBaseJavaModule implements Lifecycle
 
         @Override
         protected void onOperationTag(RXOperationTag tag) {
-            Log.d(LOG, "onOperationTag:::" + tag);
+            Log.d(LOG, "onOperationTag:::" + tag.strEPC + " " + tag.cmd);
+
+            if (tag.cmd == CMD.WRITE_TAG || tag.cmd == CMD.BLOCK_WRITE_TAG) {
+                WritableMap map = Arguments.createMap();
+                map.putBoolean("status", true);
+                map.putString("error", null);
+                sendEvent(WRITE_TAG_STATUS, map);
+            }
         }
 
         @Override
@@ -493,14 +568,21 @@ public class UrovoModule extends ReactContextBaseJavaModule implements Lifecycle
     private final BroadcastReceiver mReceiver = new BroadcastReceiver() {
         @Override
         public void onReceive(Context context, Intent intent) {
-            //获取当前电量,范围是 0～100
+            String action = intent.getAction();
+            Log.d(LOG, "onReceive , action:" + action);
 
-            int level = intent.getIntExtra("level", 0);
-            Log.d(LOG, "mReceiver");
+            if (action.equals(ACTION_BATTERY_CHANGED)) {
+                //获取当前电量,范围是 0～100
+                int level = intent.getIntExtra("level", 0);
+                WritableMap map = Arguments.createMap();
+                map.putInt("level", level);
+                sendEvent(BATTERY_STATUS, map);
+            } else if (action.equals(ACTION_DECODE)) {
+                String barcode = intent.getStringExtra(BARCODE_STRING_TAG);
 
-            WritableMap map = Arguments.createMap();
-            map.putInt("level", level);
-            sendEvent(BATTERY_STATUS, map);
+                sendEvent(BARCODE, barcode);
+            }
+
         }
     };
 
@@ -533,6 +615,17 @@ public class UrovoModule extends ReactContextBaseJavaModule implements Lifecycle
                 }
             }
         }
+    }
+
+    private byte[] StringToBytes(String s) {
+        int var1 = s.length();
+        byte[] var2 = new byte[var1 / 2];
+
+        for (int var3 = 0; var3 < var1; var3 += 2) {
+            var2[var3 / 2] = (byte) ((Character.digit(s.charAt(var3), 16) << 4) + Character.digit(s.charAt(var3 + 1), 16));
+        }
+
+        return var2;
     }
 
     private boolean addTagToList(String strEPC) {
