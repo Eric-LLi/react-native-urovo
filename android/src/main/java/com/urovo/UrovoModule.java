@@ -51,12 +51,10 @@ public class UrovoModule extends ReactContextBaseJavaModule implements Lifecycle
     private final ReactApplicationContext reactContext;
     private static UrovoModule instance = null;
 
-    private static ArrayList<String> cacheTags = new ArrayList<>();
+    private static final ArrayList<String> cacheTags = new ArrayList<>();
     private static boolean isSingleRead = false;
     private static boolean isReadBarcode = false;
     private static boolean isReading = false;
-    //    private static boolean loopFlag = false;
-//    private final byte btReadId = (byte) 0xFF;
 
     //RFID
     private static final ModuleConnector mConnector = new ReaderConnector();
@@ -272,11 +270,7 @@ public class UrovoModule extends ReactContextBaseJavaModule implements Lifecycle
     @ReactMethod
     public void setEnabled(boolean enable, Promise promise) {
         if (mConnector.isConnected()) {
-            if (enable) {
-                isReadBarcode = false;
-            } else {
-                isReadBarcode = true;
-            }
+            isReadBarcode = !enable;
         }
         promise.resolve(true);
     }
@@ -400,7 +394,7 @@ public class UrovoModule extends ReactContextBaseJavaModule implements Lifecycle
             String epc = tag.strEPC.replaceAll(" ", "");
 
             Log.d(LOG, "epc:" + epc);
-            int rssi = Integer.parseInt(tag.strRSSI);
+//            int rssi = Integer.parseInt(tag.strRSSI);
 
             if (isSingleRead) {
                 if (addTagToList(epc) && cacheTags.size() == 1) {
@@ -510,29 +504,6 @@ public class UrovoModule extends ReactContextBaseJavaModule implements Lifecycle
         }
     };
 
-    private void set53GPIOEnabled(boolean enable) {
-        FileOutputStream f = null;
-        FileOutputStream f1 = null;
-        try {
-            Log.i("ubx", "set53GPIOcEnabled: " + enable);
-            f = new FileOutputStream("/sys/devices/soc/c170000.serial/pogo_uart");
-            f.write(enable ? "1".getBytes() : "0".getBytes());
-            f1 = new FileOutputStream("/sys/devices/virtual/Usb_switch/usbswitch/function_otg_en");
-            f1.write(enable ? "2".getBytes() : "0".getBytes());
-        } catch (Exception e) {
-            e.printStackTrace();
-        } finally {
-            if (f != null) {
-                try {
-                    f.close();
-                    f1.close();
-                } catch (IOException e) {
-                    e.printStackTrace();
-                }
-            }
-        }
-    }
-
     private void set53CGPIOEnabled(boolean enable) {
         FileOutputStream f = null;
         FileOutputStream f1 = null;
@@ -549,6 +520,13 @@ public class UrovoModule extends ReactContextBaseJavaModule implements Lifecycle
             if (f != null) {
                 try {
                     f.close();
+                } catch (IOException e) {
+                    e.printStackTrace();
+                }
+            }
+
+            if (f1 != null) {
+                try {
                     f1.close();
                 } catch (IOException e) {
                     e.printStackTrace();
