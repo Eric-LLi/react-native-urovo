@@ -18,6 +18,7 @@ import androidx.annotation.Nullable;
 import com.facebook.react.bridge.Arguments;
 import com.facebook.react.bridge.LifecycleEventListener;
 import com.facebook.react.bridge.Promise;
+import com.facebook.react.bridge.WritableArray;
 import com.facebook.react.bridge.WritableMap;
 import com.facebook.react.modules.core.DeviceEventManagerModule;
 import com.module.interaction.ModuleConnector;
@@ -54,6 +55,7 @@ public class UrovoModule extends ReactContextBaseJavaModule implements Lifecycle
     private final String WRITE_TAG_STATUS = "WRITE_TAG_STATUS";
     private final String BATTERY_STATUS = "BATTERY_STATUS";
     private final String TAG = "TAG";
+    private final String TAGS = "TAGS";
     private final String BARCODE = "BARCODE";
     private final ReactApplicationContext reactContext;
     private static UrovoModule instance = null;
@@ -96,9 +98,17 @@ public class UrovoModule extends ReactContextBaseJavaModule implements Lifecycle
                 .emit(eventName, msg);
     }
 
+    private void sendEvent(String eventName, WritableArray array) {
+        this.reactContext
+                .getJSModule(DeviceEventManagerModule.RCTDeviceEventEmitter.class)
+                .emit(eventName, array);
+    }
+
     public void onKeyDown(int keyCode, KeyEvent event) {
         if (keyCode == 523) {
             if (event.getRepeatCount() == 0) {
+                isReading = true;
+
                 if (isReadBarcode) {
                     barcodeRead();
                 } else {
@@ -115,6 +125,8 @@ public class UrovoModule extends ReactContextBaseJavaModule implements Lifecycle
     public void onKeyUp(int keyCode, KeyEvent event) {
         if (keyCode == 523) {
             if (event.getRepeatCount() == 0) {
+                isReading = false;
+
                 if (isReadBarcode) {
                     barcodeCancel();
                 } else {
@@ -231,7 +243,7 @@ public class UrovoModule extends ReactContextBaseJavaModule implements Lifecycle
                 if (result == 0)
                     m_curReaderSetting.btAryOutputPower = new byte[]{(byte) antennaLevel};
 
-                promise.resolve(result);
+                promise.resolve(result == 0);
             } else {
                 throw new Exception("Reader is not connected");
             }
@@ -383,13 +395,11 @@ public class UrovoModule extends ReactContextBaseJavaModule implements Lifecycle
 
     private void read() {
         if (mConnector.isConnected()) {
-            isReading = true;
             mLoopRunnable.run();
         }
     }
 
     private void cancel() {
-        isReading = false;
         mLoopHandler.removeCallbacks(mLoopRunnable);
     }
 
@@ -412,10 +422,15 @@ public class UrovoModule extends ReactContextBaseJavaModule implements Lifecycle
             mLoopHandler.removeCallbacks(this);
 
             mReaderHelper.customizedSessionTargetInventory(m_curReaderSetting.btReadId, (byte) 1, (byte) 0, (byte) 1);
+
+            mLoopHandler.postDelayed(this, 2000);
         }
     };
 
     private final RXObserver rxObserver = new RXObserver() {
+        final ArrayList<String> temp_tags = new ArrayList<>();
+        String temp_tag = "";
+        int temp_rssi = -1000;
 
         @Override
         protected void onExeCMDStatus(byte cmd, byte status) {
@@ -448,6 +463,10 @@ public class UrovoModule extends ReactContextBaseJavaModule implements Lifecycle
                     map.putString("error", strLog);
                 }
                 sendEvent(WRITE_TAG_STATUS, map);
+            } else if (cmd == CMD.CUSTOMIZED_SESSION_TARGET_INVENTORY || cmd == CMD.REAL_TIME_INVENTORY) {
+                if (isReading) {
+                    mLoopRunnable.run();
+                }
             }
         }
 
@@ -460,19 +479,20 @@ public class UrovoModule extends ReactContextBaseJavaModule implements Lifecycle
         @Override
         protected void onInventoryTag(RXInventoryTag tag) {
             String epc = tag.strEPC.replaceAll(" ", "");
-
-            Log.d(LOG, "epc:" + epc);
             int rssi = Integer.parseInt(tag.strRSSI);
 
-            if (isSingleRead) {
-                if (addTagToList(epc) && cacheTags.size() == 1) {
-                    cancel();
+            Log.d(LOG, "epc:" + epc);
 
-                    sendEvent(TAG, epc);
-                }
-            } else {
-                if (addTagToList(epc)) {
-                    sendEvent(TAG, epc);
+            if (isReading) {
+                if (isSingleRead) {
+                    if (rssi >= temp_rssi) {
+                        temp_tag = epc;
+                        temp_rssi = rssi;
+                    }
+                } else {
+                    if (addTagToList(epc)) {
+                        temp_tags.add(epc);
+                    }
                 }
             }
         }
@@ -482,6 +502,19 @@ public class UrovoModule extends ReactContextBaseJavaModule implements Lifecycle
             Log.d(LOG, "onInventoryTagEnd");
 
             if (isReading) {
+                if (isSingleRead) {
+                    cancel();
+
+                    sendEvent(TAG, temp_tag);
+
+                    temp_tag = "";
+                    temp_rssi = -1000;
+                } else {
+                    sendEvent(TAGS, Arguments.fromList(temp_tags));
+
+                    temp_tags.clear();
+                }
+
                 mLoopRunnable.run();
             }
         }
