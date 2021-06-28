@@ -483,16 +483,19 @@ public class UrovoModule extends ReactContextBaseJavaModule implements Lifecycle
 
             Log.d(LOG, "epc:" + epc);
 
-            if (isReading) {
-                if (isSingleRead) {
-                    if (rssi >= temp_rssi) {
-                        temp_tag = epc;
-                        temp_rssi = rssi;
-                    }
-                } else {
-                    if (addTagToList(epc)) {
-                        temp_tags.add(epc);
-                    }
+            if (isSingleRead) {
+//                    if (addTagToList(epc) && cacheTags.size() == 1) {
+//                        cancel();
+//
+//                        sendEvent(TAG, epc);
+//                    }
+                if (rssi >= temp_rssi) {
+                    temp_tag = epc;
+                    temp_rssi = rssi;
+                }
+            } else {
+                if (isReading && addTagToList(epc)) {
+                    temp_tags.add(epc);
                 }
             }
         }
@@ -501,21 +504,23 @@ public class UrovoModule extends ReactContextBaseJavaModule implements Lifecycle
         protected void onInventoryTagEnd(RXInventoryTag.RXInventoryTagEnd tagEnd) {
             Log.d(LOG, "onInventoryTagEnd");
 
-            if (isReading) {
-                if (isSingleRead) {
-                    cancel();
+            if (isSingleRead) {
+                cancel();
 
+                if (addTagToList(temp_tag) && cacheTags.size() == 1) {
                     sendEvent(TAG, temp_tag);
+                }
 
-                    temp_tag = "";
-                    temp_rssi = -1000;
-                } else {
+                temp_tag = "";
+                temp_rssi = -1000;
+            } else {
+                if (isReading) {
                     sendEvent(TAGS, Arguments.fromList(temp_tags));
 
                     temp_tags.clear();
-                }
 
-                mLoopRunnable.run();
+                    mLoopRunnable.run();
+                }
             }
         }
 
